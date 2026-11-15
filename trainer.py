@@ -11,14 +11,31 @@ from utils.toolkit import count_parameters
 
 
 def train(args):
-    seed_list = copy.deepcopy(args['seed'])
-    device = copy.deepcopy(args['device'])
-    device = device.split(',')
+    raw_seeds = args.get('seed', 0)
+    # Support int, list of ints, or nested lists
+    if isinstance(raw_seeds, (int, str)):
+        seed_list = [int(raw_seeds)]
+    elif isinstance(raw_seeds, list):
+        seed_list = []
+        for s in raw_seeds:
+            if isinstance(s, list):
+                seed_list.extend([int(x) for x in s])
+            else:
+                seed_list.append(int(s))
+    else:
+        seed_list = [int(raw_seeds)]
+
+    raw_device = args.get('device', '0')
+    if isinstance(raw_device, list):
+        device_str = ','.join(str(d) for d in raw_device)
+    else:
+        device_str = str(raw_device)
 
     for seed in seed_list:
-        args['seed'] = seed
-        args['device'] = device
-        _train(args)
+        args_run = copy.deepcopy(args)
+        args_run['seed'] = int(seed)
+        args_run['device'] = device_str.split(',')
+        _train(args_run)
 
     myseed = 42069  # set a random seed for reproducibility
     torch.backends.cudnn.deterministic = True
@@ -28,7 +45,16 @@ def train(args):
 
 
 def _train(args):
-    if args['model_name'] in ['InfLoRA', 'InfLoRA_domain', 'InfLoRAb5_domain', 'InfLoRAb5', 'InfLoRA_CA', 'InfLoRA_CA1']:
+    # Ensure seed is an integer; if a multi-seed list was passed directly, delegate to train()
+    if isinstance(args['seed'], list):
+        if len(args['seed']) > 1:
+            train(args)
+            return
+        args['seed'] = int(args['seed'][0])
+    else:
+        args['seed'] = int(args['seed'])
+
+    if 'inflora' in args['model_name'].lower():
         logdir = 'logs/{}/{}_{}_{}/{}/{}/{}/{}_{}-{}'.format(args['dataset'], args['init_cls'], args['increment'], args['net_type'], args['model_name'], args['optim'], args['rank'], args['lamb'], args['lame'], args['lrate'])
     else:
         logdir = 'logs/{}/{}_{}_{}/{}/{}'.format(args['dataset'], args['init_cls'], args['increment'], args['net_type'], args['model_name'], args['optim'])
@@ -36,6 +62,13 @@ def _train(args):
     if not os.path.exists(logdir):
         os.makedirs(logdir)
     logfilename = os.path.join(logdir, '{}'.format(args['seed']))
+    
+    # Reset existing root logger handlers so each seed writes to its own dedicated file
+    root_logger = logging.getLogger()
+    for h in root_logger.handlers[:]:
+        root_logger.removeHandler(h)
+        h.close()
+
     logging.basicConfig(
         level=logging.INFO,
         format='%(asctime)s [%(filename)s] => %(message)s',
@@ -86,20 +119,21 @@ def _set_device(args):
     gpus = []
 
     for device in device_type:
-        if device_type == -1:
-            device = torch.device('cpu')
+        if isinstance(device, torch.device):
+            gpus.append(device)
+        elif str(device) == '-1' or device == -1:
+            gpus.append(torch.device('cpu'))
         else:
-            device = torch.device('cuda:{}'.format(device))
-
-        gpus.append(device)
+            gpus.append(torch.device('cuda:{}'.format(device)))
 
     args['device'] = gpus
 
 
 def _set_random(args):
-    torch.manual_seed(args['seed'])
-    torch.cuda.manual_seed(args['seed'])
-    torch.cuda.manual_seed_all(args['seed'])
+    seed = int(args['seed'])
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -107,4 +141,3 @@ def _set_random(args):
 def print_args(args):
     for key, value in args.items():
         logging.info('{}: {}'.format(key, value))
-
